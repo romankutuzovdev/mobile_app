@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dotted_border/dotted_border.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -1791,7 +1792,19 @@ class _KeypadButton extends StatelessWidget {
   }
 }
 
-/// Экран верификации телефона
+/// Форматирует телефон для отображения: +998 93 201 49 79
+String _formatPhoneForDisplay(String phone) {
+  final digits = phone.replaceAll(RegExp(r'\D'), '');
+  if (digits.isEmpty) return phone;
+  final buffer = StringBuffer('+');
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (i == 3 || i == 5 || i == 7 || i == 9)) buffer.write(' ');
+    buffer.write(digits[i]);
+  }
+  return buffer.toString();
+}
+
+/// Экран верификации телефона (шаг 2/4 регистрации)
 class PhoneVerificationScreen extends StatefulWidget {
   final String phone;
   final String password;
@@ -1807,11 +1820,11 @@ class PhoneVerificationScreen extends StatefulWidget {
 }
 
 class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
-  final _codeController = TextEditingController();
+  String _code = '';
   bool _loading = false;
   bool _verifying = false;
   String? _error;
-  int _resendTimer = 0;
+  int _resendTimer = 60;
   Timer? _timer;
 
   @override
@@ -1823,12 +1836,11 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    _codeController.dispose();
     super.dispose();
   }
 
   void _startResendTimer() {
-    _resendTimer = 60; // 60 секунд
+    _resendTimer = 60;
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -1845,6 +1857,29 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
     });
   }
 
+  bool get _canProceed => _code.length == 4 && !_verifying && !_loading;
+
+  void _onKeyPressed(String key) {
+    if (key == 'backspace') {
+      if (_code.isNotEmpty) {
+        setState(() {
+          _code = _code.substring(0, _code.length - 1);
+          _error = null;
+        });
+      }
+      return;
+    }
+    if (_code.length < 4 && RegExp(r'^\d$').hasMatch(key)) {
+      setState(() {
+        _code += key;
+        _error = null;
+      });
+      if (_code.length == 4) {
+        _verifyCode();
+      }
+    }
+  }
+
   Future<void> _sendCode() async {
     if (_resendTimer > 0) return;
 
@@ -1856,9 +1891,7 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
     try {
       await ApiClient.dio.post(
         '/auth/send-verification-code',
-        data: {
-          'phone': widget.phone,
-        },
+        data: {'phone': widget.phone},
       );
 
       if (!mounted) return;
@@ -1866,7 +1899,7 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Код отправлен повторно'),
-          backgroundColor: AppColors.accentPrimary,
+          backgroundColor: LightThemeColors.accentOrange,
         ),
       );
     } on DioException catch (e) {
@@ -1883,12 +1916,7 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
   }
 
   Future<void> _verifyCode() async {
-    final code = _codeController.text.trim();
-
-    if (code.isEmpty || code.length < 4) {
-      setState(() => _error = 'Введите код подтверждения');
-      return;
-    }
+    if (_code.length < 4) return;
 
     setState(() {
       _verifying = true;
@@ -1896,22 +1924,14 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
     });
 
     try {
-      // Подтверждение телефона
       await ApiClient.dio.post(
         '/auth/verify-phone',
-        data: {
-          'phone': widget.phone,
-          'code': code,
-        },
+        data: {'phone': widget.phone, 'code': _code},
       );
 
-      // Автоматический вход после верификации
       final loginResponse = await ApiClient.dio.post(
         '/auth/login',
-        data: {
-          'phone': widget.phone,
-          'password': widget.password,
-        },
+        data: {'phone': widget.phone, 'password': widget.password},
       );
 
       final data = loginResponse.data as Map<String, dynamic>;
@@ -1940,97 +1960,259 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final formattedPhone = _formatPhoneForDisplay(widget.phone);
+    final minutes = _resendTimer ~/ 60;
+    final seconds = _resendTimer % 60;
+    final timerStr = '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: LightThemeColors.background,
       appBar: AppBar(
-        title: const Text('Подтверждение телефона'),
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Введите код подтверждения',
-                style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Код отправлен на номер +${widget.phone}',
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios, color: LightThemeColors.textPrimary),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: const Text(
+          'Регистрация',
+          style: TextStyle(
+            color: LightThemeColors.textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        centerTitle: true,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Center(
+              child: Text(
+                '2/4',
                 style: const TextStyle(
-                  color: AppColors.textSecondary,
+                  color: LightThemeColors.textSecondary,
                   fontSize: 14,
                 ),
               ),
-              const SizedBox(height: 32),
-              TextField(
-                controller: _codeController,
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 8,
-                ),
-                maxLength: 6,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                ],
-                decoration: const InputDecoration(
-                  labelText: 'Код подтверждения',
-                  hintText: '000000',
-                  counterText: '',
-                ),
-                onSubmitted: (_) => _verifyCode(),
-              ),
-              const SizedBox(height: 12),
-              if (_error != null)
-                Text(
-                  _error!,
-                  style: const TextStyle(color: AppColors.error),
-                ),
-              const Spacer(),
-              SizedBox(
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(child: _buildCodeContent(formattedPhone, timerStr)),
+            // Кнопка внизу (как на главной)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: SizedBox(
                 width: double.infinity,
+                height: 56,
                 child: ElevatedButton(
-                  onPressed: (_verifying || _loading) ? null : _verifyCode,
+                  onPressed: _canProceed ? _verifyCode : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _canProceed
+                        ? LightThemeColors.buttonPrimaryBg
+                        : const Color(0xFF9CA3AF),
+                    foregroundColor: _canProceed
+                        ? LightThemeColors.buttonPrimaryText
+                        : Colors.white,
+                    disabledBackgroundColor: const Color(0xFF9CA3AF),
+                    disabledForegroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   child: _verifying
                       ? const SizedBox(
-                          height: 18,
-                          width: 18,
+                          height: 20,
+                          width: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.black),
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                           ),
                         )
-                      : const Text('Подтвердить'),
+                      : const Text('Продолжить'),
                 ),
               ),
-              const SizedBox(height: 12),
-              Center(
-                child: _resendTimer > 0
-                    ? Text(
-                        'Повторная отправка через $_resendTimer сек',
-                        style: const TextStyle(
-                          color: AppColors.textMuted,
-                          fontSize: 14,
+            ),
+            // Цифровая клавиатура
+            Container(
+              color: const Color(0xFFE5E7EB),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildKeypadRow(['1', '2', '3']),
+                    const SizedBox(height: 12),
+                    _buildKeypadRow(['4', '5', '6']),
+                    const SizedBox(height: 12),
+                    _buildKeypadRow(['7', '8', '9']),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: _buildKeypadKey('+*#', false)),
+                        const SizedBox(width: 12),
+                        Expanded(child: _buildKeypadKey('0', true)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _buildKeypadKey('⌫', true, isBackspace: true),
                         ),
-                      )
-                    : TextButton(
-                        onPressed: _loading ? null : _sendCode,
-                        child: const Text(
-                          'Отправить код повторно',
-                          style: TextStyle(color: AppColors.accentPrimary),
-                        ),
-                      ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCodeContent(String formattedPhone, String timerStr) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Введите код из СМС',
+            style: TextStyle(
+              color: LightThemeColors.textPrimary,
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Мы отправили код на номер: $formattedPhone',
+            style: const TextStyle(
+              color: LightThemeColors.textSecondary,
+              fontSize: 14,
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              _error!,
+              style: const TextStyle(
+                color: Color(0xFFF97373),
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          const SizedBox(height: 12),
+          Center(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: List.generate(4, (i) {
+                final hasDigit = i < _code.length;
+                final isActive = i == _code.length;
+                final underlineColor = hasDigit || isActive
+                    ? LightThemeColors.accentOrange
+                    : const Color(0xFFE0E0E0);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: SizedBox(
+                    width: 44,
+                    child: Column(
+                      children: [
+                        Text(
+                          hasDigit ? _code[i] : (isActive ? '|' : ''),
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            color: LightThemeColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Container(
+                          height: 2,
+                          width: 44,
+                          decoration: BoxDecoration(
+                            color: underlineColor,
+                            borderRadius: BorderRadius.circular(1),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Center(
+            child: GestureDetector(
+              onTap: _resendTimer == 0 && !_loading ? _sendCode : null,
+              child: Text.rich(
+                TextSpan(
+                  style: const TextStyle(
+                    color: LightThemeColors.textSecondary,
+                    fontSize: 14,
+                  ),
+                  children: [
+                    const TextSpan(text: 'Отправить код повторно: '),
+                    TextSpan(
+                      text: _resendTimer > 0 ? timerStr : 'готово',
+                      style: const TextStyle(
+                        color: LightThemeColors.accentOrange,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKeypadRow(List<String> keys) {
+    return Row(
+      children: [
+        for (var i = 0; i < keys.length; i++) ...[
+          if (i > 0) const SizedBox(width: 12),
+          Expanded(child: _buildKeypadKey(keys[i], true)),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildKeypadKey(String label, bool enabled, {bool isBackspace = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: enabled
+              ? () => _onKeyPressed(isBackspace ? 'backspace' : label[0])
+              : null,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            height: 52,
+            alignment: Alignment.center,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: isBackspace ? 20 : 22,
+                fontWeight: FontWeight.w500,
+                color: enabled ? LightThemeColors.textPrimary : LightThemeColors.textMuted,
+              ),
+            ),
           ),
         ),
       ),
@@ -2038,7 +2220,7 @@ class _PhoneVerificationScreenState extends State<PhoneVerificationScreen> {
   }
 }
 
-/// Основной shell с нижней навигацией
+/// Основной shell с нижней навигацией (светлая тема)
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -2049,38 +2231,107 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
+  void selectTab(int index) => setState(() => _index = index);
+
   final _screens = const [
-    ChatScreen(),
     CarsScreen(),
+    SubscriptionScreen(),
+    ChatScreen(),
     ProfileScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final isSelected = List.generate(4, (i) => i == _index);
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: LightThemeColors.background,
       body: _screens[_index],
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: const Color(0xFF020617),
-        currentIndex: _index,
-        selectedItemColor: AppColors.accentPrimary,
-        unselectedItemColor: AppColors.textMuted,
-        type: BottomNavigationBarType.fixed,
-        onTap: (i) => setState(() => _index = i),
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.auto_awesome),
-            label: 'AI чат',
+      bottomNavigationBar: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F8F8),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 12,
+                offset: const Offset(0, -2),
+              ),
+            ],
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.directions_car_filled_rounded),
-            label: 'Мои авто',
+          child: SafeArea(
+            top: false,
+            child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildNavItem(0, Icons.directions_car_outlined, Icons.directions_car_rounded, 'Автомобили', isSelected[0]),
+                _buildNavItem(1, Icons.diamond_outlined, Icons.diamond, 'Подписка', isSelected[1]),
+                _buildNavItem(2, Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded, 'Чат', isSelected[2]),
+                _buildNavItem(3, Icons.person_outline_rounded, Icons.person_rounded, 'Профиль', isSelected[3]),
+              ],
+            ),
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline_rounded),
-            label: 'Профиль',
+        ),
+      ),
+    ),
+    );
+  }
+
+  Widget _buildNavItem(int index, IconData iconOutlined, IconData iconFilled, String label, bool selected) {
+    final color = selected ? LightThemeColors.accentOrange : const Color(0xFF666666);
+    return InkWell(
+      onTap: () => setState(() => _index = index),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(selected ? iconFilled : iconOutlined, color: color, size: 26),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Экран подписки (заглушка)
+class SubscriptionScreen extends StatelessWidget {
+  const SubscriptionScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: LightThemeColors.background,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text(
+          'Подписка',
+          style: TextStyle(
+            color: LightThemeColors.textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
           ),
-        ],
+        ),
+        centerTitle: true,
+      ),
+      body: const Center(
+        child: Text(
+          'Раздел подписки',
+          style: TextStyle(color: LightThemeColors.textSecondary),
+        ),
       ),
     );
   }
@@ -2099,6 +2350,20 @@ class _CarsScreenState extends State<CarsScreen> {
   String? _error;
   List<dynamic> _cars = [];
   int? _currentCarId;
+  String? _userName;
+
+  Future<void> _loadUser() async {
+    try {
+      final resp = await ApiClient.dio.get('/auth/me');
+      final data = resp.data as Map<String, dynamic>?;
+      final un = data?['username']?.toString();
+      setState(() {
+        _userName = (un != null && un.isNotEmpty) ? un : 'Профиль';
+      });
+    } catch (_) {
+      setState(() => _userName = 'Профиль');
+    }
+  }
 
   Future<void> _loadCars() async {
     setState(() {
@@ -2153,6 +2418,7 @@ class _CarsScreenState extends State<CarsScreen> {
   @override
   void initState() {
     super.initState();
+    _loadUser();
     _loadCars();
   }
 
@@ -2162,143 +2428,349 @@ class _CarsScreenState extends State<CarsScreen> {
     ).then((_) => _loadCars());
   }
 
+  Future<void> _deleteCar(int carId) async {
+    try {
+      await ApiClient.dio.delete('/cars/$carId');
+      setState(() => _cars.removeWhere((c) => (c as Map)['id'] == carId));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка удаления: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Мои автомобили'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_rounded),
-            onPressed: _openAddCar,
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _loadCars,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null
-                  ? ListView(
-                      children: [
-                        Text(
-                          _error!,
-                          style: const TextStyle(color: AppColors.error),
-                        ),
-                      ],
-                    )
-                  : _cars.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'Автомобилей пока нет.\nДобавьте через VIN.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: AppColors.textSecondary),
-                          ),
-                        )
-                      : ListView.separated(
-                          itemCount: _cars.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 12),
-                          itemBuilder: (context, index) {
-                            final car = _cars[index] as Map<String, dynamic>;
-                            final id = car['id'] as int?;
-                            final brand = car['brand']?.toString() ?? '';
-                            final model = car['model']?.toString() ?? '';
-                            final year = car['year']?.toString() ?? '';
-                            final vin = car['vin']?.toString() ?? '';
-                            final createdAtStr = car['created_at']?.toString();
-                            DateTime? createdAt;
-                            if (createdAtStr != null) {
-                              try {
-                                createdAt = DateTime.parse(createdAtStr);
-                              } catch (_) {
-                                createdAt = null;
-                              }
-                            }
-
-                            final isCurrent = id != null && id == _currentCarId;
-
-                            return InkWell(
-                              onTap: () {
-                                if (id != null) {
-                                  // Устанавливаем авто как текущее для чата (без закрытия экрана)
-                                  _setCurrentCar(id, closeScreen: false);
-                                  // Открываем экран деталей
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          CarDetailsScreen(car: car),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xB30F172A),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: isCurrent
-                                        ? AppColors.accentPrimary
-                                        : Colors.white.withOpacity(0.06),
-                                  ),
-                                ),
-                                padding: const EdgeInsets.all(16),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.directions_car_filled_rounded,
-                                        color: AppColors.accentSecondary),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            [
-                                              brand,
-                                              model,
-                                              if (year.isNotEmpty) '($year)'
-                                            ].where((e) => e.isNotEmpty).join(' '),
-                                            style: const TextStyle(
-                                              color: AppColors.textPrimary,
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          if (vin.isNotEmpty)
-                                            Text(
-                                              'VIN: $vin',
-                                              style: const TextStyle(
-                                                color: AppColors.textSecondary,
-                                                fontSize: 13,
-                                              ),
-                                            ),
-                                          if (createdAt != null) ...[
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              'Добавлено: '
-                                              '${createdAt.day.toString().padLeft(2, '0')}.'
-                                              '${createdAt.month.toString().padLeft(2, '0')}.'
-                                              '${createdAt.year}',
-                                              style: const TextStyle(
-                                                color: AppColors.textMuted,
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ],
-                                          // Дополнительная пометка выбранного авто убрана по требованию
-                                        ],
-                                      ),
-                                    ),
-                                  ],
+      backgroundColor: LightThemeColors.background,
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: () async {
+            await _loadUser();
+            await _loadCars();
+          },
+          child: CustomScrollView(
+            slivers: [
+              // Хедер: аватар + имя + колокольчик
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          final shell = context.findAncestorStateOfType<_MainShellState>();
+                          shell?.selectTab(3);
+                        },
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundColor: LightThemeColors.accentOrange.withOpacity(0.3),
+                              child: Text(
+                                (_userName?.isNotEmpty == true ? _userName![0] : '?').toUpperCase(),
+                                style: const TextStyle(
+                                  color: LightThemeColors.textPrimary,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
-                            );
-                          },
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              _userName ?? 'Профиль',
+                              style: const TextStyle(
+                                color: LightThemeColors.textPrimary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.chevron_right_rounded,
+                                color: LightThemeColors.textSecondary, size: 22),
+                          ],
                         ),
+                      ),
+                      const Spacer(),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.notifications_outlined),
+                            onPressed: () {},
+                            color: LightThemeColors.textPrimary,
+                          ),
+                          Positioned(
+                            top: 10,
+                            right: 10,
+                            child: Container(
+                              width: 8,
+                              height: 8,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFF97373),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // Заголовок
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Text(
+                    'Все автомобили',
+                    style: const TextStyle(
+                      color: LightThemeColors.textPrimary,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              // Карточка "Добавить автомобиль"
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: GestureDetector(
+                    onTap: _openAddCar,
+                    child: DottedBorder(
+                      borderType: BorderType.RRect,
+                      radius: const Radius.circular(12),
+                      strokeWidth: 1.5,
+                      dashPattern: const [6, 3],
+                      color: const Color(0xFFB0B0B0),
+                      padding: EdgeInsets.zero,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
+                          color: Colors.transparent,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.add_rounded,
+                                size: 40,
+                                color: LightThemeColors.textSecondary,
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                'ДОБАВИТЬ АВТОМОБИЛЬ',
+                                style: TextStyle(
+                                  color: LightThemeColors.textSecondary,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+              if (_loading)
+                const SliverFillRemaining(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_error != null)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(_error!, style: const TextStyle(color: Color(0xFFF97373))),
+                  ),
+                )
+              else if (_cars.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(
+                      child: Text(
+                        'Автомобилей пока нет.\nДобавьте через VIN.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: LightThemeColors.textSecondary),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final car = _cars[index] as Map<String, dynamic>;
+                        final id = car['id'] as int?;
+                        final brand = car['brand']?.toString() ?? '';
+                        final model = car['model']?.toString() ?? '';
+                        final year = car['year']?.toString() ?? '';
+                        final vin = car['vin']?.toString() ?? '';
+                        final createdAtStr = car['created_at']?.toString();
+                        DateTime? createdAt;
+                        if (createdAtStr != null) {
+                          try {
+                            createdAt = DateTime.parse(createdAtStr);
+                          } catch (_) {
+                            createdAt = null;
+                          }
+                        }
+                        if (id == null) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: _buildCarCard(car, id, brand, model, year, vin, createdAt),
+                          );
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Dismissible(
+                            key: ValueKey<int>(id),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 24),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE53935),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: const Column(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.delete_outline_rounded, color: Colors.white, size: 28),
+                                  SizedBox(height: 6),
+                                  Text(
+                                    'Убрать из списка',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            onDismissed: (_) => _deleteCar(id),
+                            child: _buildCarCard(car, id, brand, model, year, vin, createdAt),
+                          ),
+                        );
+                      },
+                      childCount: _cars.length,
+                    ),
+                  ),
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCarCard(
+    Map<String, dynamic> car,
+    int? id,
+    String brand,
+    String model,
+    String year,
+    String vin,
+    DateTime? createdAt,
+  ) {
+    final title = [
+      brand.toUpperCase(),
+      model.toUpperCase(),
+      if (year.isNotEmpty) '($year)',
+    ].where((e) => e.isNotEmpty).join(' ');
+
+    return InkWell(
+      onTap: () {
+        if (id != null) {
+          _setCurrentCar(id, closeScreen: false);
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => CarDetailsScreen(car: car)),
+          );
+        }
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F5F5),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: LightThemeColors.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (vin.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'VIN: $vin',
+                      style: const TextStyle(
+                        color: LightThemeColors.textSecondary,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                  if (createdAt != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Добавлено: '
+                      '${createdAt.day.toString().padLeft(2, '0')}.'
+                      '${createdAt.month.toString().padLeft(2, '0')}.'
+                      '${createdAt.year}',
+                      style: const TextStyle(
+                        color: LightThemeColors.textMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: LightThemeColors.accentOrange,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.directions_car_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2384,33 +2856,64 @@ class _AddCarByVinScreenState extends State<AddCarByVinScreen> {
   Widget build(BuildContext context) {
     final vinInfo = _vinInfo;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: LightThemeColors.background,
       appBar: AppBar(
-        title: const Text('Добавить авто по VIN'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios, color: LightThemeColors.textPrimary),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: const Text(
+          'Добавить авто по VIN',
+          style: TextStyle(
+            color: LightThemeColors.textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        centerTitle: true,
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
               TextField(
                 controller: _vinController,
                 maxLength: 17,
-                decoration: const InputDecoration(
-                  labelText: 'VIN',
-                  hintText: 'Например, WDB12345678901234',
+                style: const TextStyle(
+                  color: LightThemeColors.textPrimary,
+                  fontSize: 16,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Введите номер VIN',
+                  hintStyle: TextStyle(
+                    color: LightThemeColors.textMuted,
+                    fontSize: 16,
+                  ),
+                  counterText: '',
+                  border: const UnderlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFFE0E0E0)),
+                  ),
+                  enabledBorder: const UnderlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFFE0E0E0)),
+                  ),
+                  focusedBorder: const UnderlineInputBorder(
+                    borderSide: BorderSide(
+                      color: LightThemeColors.accentOrange,
+                      width: 2,
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 8),
-              if (_error != null)
-                Text(
-                  _error!,
-                  style: const TextStyle(color: AppColors.error),
-                ),
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: () async {
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () async {
                   final vin = _vinController.text.trim();
                   String? phone;
                   try {
@@ -2419,7 +2922,6 @@ class _AddCarByVinScreenState extends State<AddCarByVinScreen> {
                   } catch (_) {
                     phone = null;
                   }
-
                   await TelegramNotifier.sendCarNotFound(
                     vin: vin.isEmpty ? 'VIN не указан' : vin,
                     phone: phone,
@@ -2433,38 +2935,20 @@ class _AddCarByVinScreenState extends State<AddCarByVinScreen> {
                 },
                 child: const Text(
                   'Не нашли своё авто? Сообщить нам',
-                  style: TextStyle(color: AppColors.accentPrimary),
+                  style: TextStyle(
+                    color: LightThemeColors.accentOrange,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _loading ? null : _searchVin,
-                      child: _loading
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor:
-                                    AlwaysStoppedAnimation<Color>(Colors.black),
-                              ),
-                            )
-                          : const Text('Проверить авто'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  if (vinInfo != null)
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _loading ? null : _addCar,
-                        child: const Text('Добавить'),
-                      ),
-                    ),
-                ],
-              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: const TextStyle(color: Color(0xFFE53935), fontSize: 14),
+                ),
+              ],
               const SizedBox(height: 16),
               if (vinInfo != null)
                 Builder(
@@ -2473,196 +2957,233 @@ class _AddCarByVinScreenState extends State<AddCarByVinScreen> {
                     final brand = basic?['brand']?.toString() ?? '';
                     final model = basic?['model']?.toString() ?? '';
                     final year = basic?['year'];
+                    final vin = _vinController.text.trim();
 
-                    final engine =
-                        vinInfo['engine'] as Map<String, dynamic>?;
-                    final transmission =
-                        vinInfo['transmission'] as Map<String, dynamic>?;
-                    final dimensions =
-                        vinInfo['dimensions'] as Map<String, dynamic>?;
-                    final fuel =
-                        vinInfo['fuel'] as Map<String, dynamic>?;
-                    final safety =
-                        vinInfo['safety'] as Map<String, dynamic>?;
-                    final trims =
-                        vinInfo['possible_trim_levels'] as List<dynamic>?;
-                    final notes = vinInfo['notes']?.toString();
+                    final engine = vinInfo['engine'] as Map<String, dynamic>?;
+                    final transmission = vinInfo['transmission'] as Map<String, dynamic>?;
+                    final dimensions = vinInfo['dimensions'] as Map<String, dynamic>?;
+                    final fuel = vinInfo['fuel'] as Map<String, dynamic>?;
+                    final safety = vinInfo['safety'] as Map<String, dynamic>?;
 
-                    return Container(
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: const Color(0xB30F172A),
-                        borderRadius: BorderRadius.circular(20),
-                        border:
-                            Border.all(color: Colors.white.withOpacity(0.08)),
-                      ),
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (brand.isNotEmpty || model.isNotEmpty)
+                    final title = [
+                      brand.toUpperCase(),
+                      model.toUpperCase(),
+                      if (year != null) '($year)',
+                    ].where((e) => e.toString().isNotEmpty).join(' ');
+
+                    Widget _specSection(String title, List<String> items) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                             Text(
-                              '$brand $model',
+                              title,
                               style: const TextStyle(
-                                color: AppColors.textPrimary,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          if (year != null) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              year.toString(),
-                              style: const TextStyle(
-                                color: AppColors.textSecondary,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 12),
-                          if (engine != null && engine.isNotEmpty) ...[
-                            const Text(
-                              'Двигатель',
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
+                                color: LightThemeColors.textSecondary,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
                             const SizedBox(height: 4),
-                            if (engine['type'] != null)
-                              Text('Тип: ${engine['type']}'),
-                            if (engine['code'] != null)
-                              Text('Код: ${engine['code']}'),
-                            if (engine['volume_l'] != null)
-                              Text('Объём: ${engine['volume_l']} л'),
-                            if (engine['power_hp'] != null)
-                              Text('Мощность: ${engine['power_hp']} л.с.'),
-                            const SizedBox(height: 8),
+                            if (items.isEmpty)
+                              const Text(
+                                'Информация не найдена',
+                                style: TextStyle(
+                                  color: LightThemeColors.textMuted,
+                                  fontSize: 13,
+                                ),
+                              )
+                            else
+                              ...items.map((s) => Padding(
+                                padding: const EdgeInsets.only(bottom: 2),
+                                child: Text(
+                                  s,
+                                  style: const TextStyle(
+                                    color: LightThemeColors.textPrimary,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              )),
                           ],
-                          if (transmission != null &&
-                              transmission.isNotEmpty) ...[
-                            const Text(
-                              'Трансмиссия',
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
+                        ),
+                      );
+                    }
+
+                    final engineItems = <String>[];
+                    if (engine != null) {
+                      if (engine['type'] != null) engineItems.add('Тип: ${engine['type']}');
+                      if (engine['code'] != null) engineItems.add('Код: ${engine['code']}');
+                      if (engine['volume_l'] != null) engineItems.add('Объём: ${engine['volume_l']} л');
+                      if (engine['power_hp'] != null) engineItems.add('Мощность: ${engine['power_hp']} л.с.');
+                    }
+
+                    final transItems = <String>[];
+                    if (transmission != null) {
+                      if (transmission['type'] != null) transItems.add('Тип: ${transmission['type']}');
+                      if (transmission['gears'] != null) transItems.add('Передачи: ${transmission['gears']}');
+                      if (transmission['drive'] != null) transItems.add('Привод: ${transmission['drive']}');
+                    }
+
+                    final dimItems = <String>[];
+                    if (dimensions != null && (dimensions['length_mm'] != null || dimensions['width_mm'] != null || dimensions['height_mm'] != null || dimensions['wheelbase_mm'] != null)) {
+                      if (dimensions['length_mm'] != null) dimItems.add('Длина: ${dimensions['length_mm']} мм');
+                      if (dimensions['width_mm'] != null) dimItems.add('Ширина: ${dimensions['width_mm']} мм');
+                      if (dimensions['height_mm'] != null) dimItems.add('Высота: ${dimensions['height_mm']} мм');
+                      if (dimensions['wheelbase_mm'] != null) dimItems.add('Колёсная база: ${dimensions['wheelbase_mm']} мм');
+                    }
+
+                    final fuelItems = <String>[];
+                    if (fuel != null) {
+                      if (fuel['fuel_type'] != null) fuelItems.add('Тип: ${fuel['fuel_type']}');
+                    }
+
+                    final safetyItems = <String>[];
+                    if (safety != null) {
+                      if (safety['abs'] != null) safetyItems.add('ABS: ${safety['abs']}');
+                      final stab = safety['traction_control'] ?? safety['esp'];
+                      if (stab != null) safetyItems.add('Стабилизация: $stab');
+                    }
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          height: 180,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE8E8E8),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Center(
+                            child: Icon(
+                              Icons.directions_car_rounded,
+                              size: 72,
+                              color: LightThemeColors.textMuted,
                             ),
-                            const SizedBox(height: 4),
-                            if (transmission['type'] != null)
-                              Text('Тип: ${transmission['type']}'),
-                            if (transmission['gears'] != null)
-                              Text('Передачи: ${transmission['gears']}'),
-                            if (transmission['drive'] != null)
-                              Text('Привод: ${transmission['drive']}'),
-                            const SizedBox(height: 8),
-                          ],
-                          if (dimensions != null && dimensions.isNotEmpty) ...[
-                            const Text(
-                              'Габариты',
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            if (dimensions['length_mm'] != null)
-                              Text('Длина: ${dimensions['length_mm']} мм'),
-                            if (dimensions['width_mm'] != null)
-                              Text('Ширина: ${dimensions['width_mm']} мм'),
-                            if (dimensions['height_mm'] != null)
-                              Text('Высота: ${dimensions['height_mm']} мм'),
-                            if (dimensions['wheelbase_mm'] != null)
-                              Text(
-                                  'Колёсная база: ${dimensions['wheelbase_mm']} мм'),
-                            const SizedBox(height: 8),
-                          ],
-                          if (fuel != null && fuel.isNotEmpty) ...[
-                            const Text(
-                              'Топливо',
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            if (fuel['fuel_type'] != null)
-                              Text('Тип: ${fuel['fuel_type']}'),
-                            if (fuel['average_consumption_l_per_100km'] != null)
-                              Text(
-                                  'Расход: ${fuel['average_consumption_l_per_100km']} л/100 км'),
-                            if (fuel['tank_l'] != null)
-                              Text('Бак: ${fuel['tank_l']} л'),
-                            const SizedBox(height: 8),
-                          ],
-                          if (safety != null && safety.isNotEmpty) ...[
-                            const Text(
-                              'Безопасность',
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            if (safety['airbags'] != null)
-                              Text('Подушки: ${safety['airbags']}'),
-                            if (safety['abs'] != null)
-                              Text('ABS: ${safety['abs']}'),
-                            if (safety['esp'] != null)
-                              Text('ESP: ${safety['esp']}'),
-                            if (safety['traction_control'] != null)
-                              Text(
-                                  'Стабилизация: ${safety['traction_control']}'),
-                            const SizedBox(height: 8),
-                          ],
-                          if (trims != null && trims.isNotEmpty) ...[
-                            const Text(
-                              'Возможные комплектации',
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              trims.join(', '),
-                              style: const TextStyle(
-                                color: AppColors.textPrimary,
-                                fontSize: 13,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                          ],
-                          if (notes != null && notes.isNotEmpty) ...[
-                            const Text(
-                              'Примечания',
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              notes,
-                              style: const TextStyle(
-                                color: AppColors.textPrimary,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          title.isNotEmpty ? title : 'Автомобиль',
+                          style: const TextStyle(
+                            color: LightThemeColors.textPrimary,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        _specSection('Двигатель', engineItems),
+                        _specSection('Трансмиссия', transItems),
+                        _specSection('Габариты', dimItems),
+                        _specSection('Топливо', fuelItems),
+                        _specSection('Безопасность', safetyItems),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Данные получены из NHTSA API. VIN проверен: $vin',
+                          style: const TextStyle(
+                            color: LightThemeColors.textMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),
             ],
           ),
+        ),
+      ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (vinInfo != null) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: OutlinedButton(
+                        onPressed: _loading ? null : _searchVin,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: LightThemeColors.accentOrange,
+                          side: const BorderSide(color: LightThemeColors.accentOrange),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        child: const Text('Проверить авто'),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _loading ? null : _addCar,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: LightThemeColors.accentOrange,
+                          foregroundColor: LightThemeColors.buttonPrimaryText,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        child: _loading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              )
+                            : const Text('Добавить авто'),
+                      ),
+                    ),
+                  ] else
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _loading ? null : _searchVin,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1F2937),
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: const Color(0xFF9CA3AF),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        child: _loading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              )
+                            : const Text('Проверить авто'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -3138,8 +3659,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: LightThemeColors.background,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        foregroundColor: LightThemeColors.textPrimary,
         title: Column(
           children: [
             const Text('AI‑помощник'),
@@ -3395,9 +3919,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: LightThemeColors.background,
       appBar: AppBar(
-        title: const Text('Профиль'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        foregroundColor: LightThemeColors.textPrimary,
+        title: const Text(
+          'Профиль',
+          style: TextStyle(color: LightThemeColors.textPrimary, fontWeight: FontWeight.w600),
+        ),
       ),
       body: SafeArea(
         child: RefreshIndicator(
