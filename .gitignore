@@ -44,6 +44,12 @@ htmlcov/
 .vscode/
 *.sublime-*
 
+# ===== Мануалы и документация (локальная) =====
+manuals/
+manual/
+**/manuals/
+**/manual/
+
 # ===== Логи и временные файлы =====
 *.log
 *.tmp
