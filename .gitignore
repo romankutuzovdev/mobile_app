@@ -49,6 +49,8 @@ manuals/
 manual/
 **/manuals/
 **/manual/
+manual_cars_2
+manuals_cars_rus
 
 # ===== Логи и временные файлы =====
 *.log
