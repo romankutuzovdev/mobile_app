@@ -233,6 +233,10 @@ class VINSearchResponse(BaseModel):
     notes: Optional[str] = None
     full_data: Optional[Dict[str, Any]] = None  # Полные данные из API
     in_database: bool = False  # Есть ли в базе
+    # Ссылки из db.vin (vehicleHistory, stolenCheck, vinDecoder)
+    vehicle_history_url: Optional[str] = None
+    stolen_check_url: Optional[str] = None
+    vin_decoder_url: Optional[str] = None
 
 
 class AddCarByVINRequest(BaseModel):

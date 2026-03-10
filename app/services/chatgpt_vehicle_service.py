@@ -1,10 +1,13 @@
 import httpx
-from typing import List
+from typing import List, Dict, Any, Optional
 import logging
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Лимит сообщений в истории (user+assistant пары) — экономия токенов
+MAX_HISTORY_MESSAGES = 20
 
 
 class ChatGPTVehicleService:
@@ -16,10 +19,11 @@ class ChatGPTVehicleService:
     async def ask_vehicle_question(
         vehicle_text_block: str,
         question: str,
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
-        Отправка вопроса в ChatGPT с системным промптом про конкретный автомобиль.
-        Возвращает только текст ответа ассистента.
+        Отправка вопроса в ChatGPT с контекстом автомобиля и историей диалога.
+        history: список {"role": "user"|"assistant", "content": "..."}
         """
         if not settings.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY не настроен")
@@ -33,6 +37,13 @@ class ChatGPTVehicleService:
             f"{vehicle_text_block}"
         )
 
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+        ]
+        if history:
+            messages.extend(history[-MAX_HISTORY_MESSAGES:])
+        messages.append({"role": "user", "content": question})
+
         headers = {
             "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
             "Content-Type": "application/json",
@@ -40,10 +51,7 @@ class ChatGPTVehicleService:
 
         payload = {
             "model": settings.OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ],
+            "messages": messages,
         }
 
         # Даём модели больше времени на ответ, т.к. запросы могут быть "тяжёлыми"

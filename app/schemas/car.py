@@ -38,6 +38,7 @@ class CarOut(BaseModel):
     model: str
     year: int
     created_at: datetime
+    has_manuals: bool = False  # true если есть мануалы в глобальном каталоге по brand/model/year
 
     class Config:
         from_attributes = True

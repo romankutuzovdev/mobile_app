@@ -14,12 +14,18 @@ class ManualRepository:
         db: AsyncSession,
         title: str,
         source_file: str,
+        brand: str,
+        model: str,
+        year: int,
         car_id: Optional[int] = None
     ) -> Manual:
-        """Создание нового мануала"""
+        """Создание мануала в глобальном каталоге"""
         db_manual = Manual(
             title=title,
             source_file=source_file,
+            brand=brand,
+            model=model,
+            year=year,
             car_id=car_id
         )
         db.add(db_manual)
@@ -41,11 +47,61 @@ class ManualRepository:
 
     @staticmethod
     async def get_manuals_by_car_id(db: AsyncSession, car_id: int) -> List[Manual]:
-        """Получение всех мануалов для автомобиля"""
+        """Получение мануалов по car_id (legacy)"""
         result = await db.execute(
             select(Manual).where(Manual.car_id == car_id).order_by(Manual.created_at.desc())
         )
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_manuals_by_brand_model_year(
+        db: AsyncSession, brand: str, model: str, year: int
+    ) -> List[Manual]:
+        """Мануалы для машины по совпадению brand/model/year. model — точное или вхождение."""
+        from sqlalchemy import func, or_
+        b, m = brand.strip().lower(), model.strip().lower()
+        if not m:
+            m = " "
+        result = await db.execute(
+            select(Manual)
+            .where(
+                func.lower(Manual.brand) == b,
+                Manual.year == year,
+                or_(
+                    func.lower(Manual.model).contains(m),
+                    func.lower(Manual.model) == m
+                )
+            )
+            .order_by(Manual.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_all_manuals_global(db: AsyncSession) -> List[Manual]:
+        """Все мануалы глобального каталога"""
+        result = await db.execute(
+            select(Manual).order_by(Manual.brand, Manual.model, Manual.year, Manual.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_orphaned_manuals(db: AsyncSession) -> List[Manual]:
+        """Мануалы без привязки к авто (car_id = NULL, например после удаления машины)"""
+        result = await db.execute(
+            select(Manual).where(Manual.car_id.is_(None)).order_by(Manual.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def update_car_id(db: AsyncSession, manual_id: UUID, car_id: int) -> Optional[Manual]:
+        """Привязать мануал к автомобилю"""
+        manual = await ManualRepository.get_manual_by_id(db, manual_id)
+        if not manual:
+            return None
+        manual.car_id = car_id
+        await db.commit()
+        await db.refresh(manual)
+        return manual
 
     @staticmethod
     async def delete_manual(db: AsyncSession, manual_id: UUID) -> bool:

@@ -2,18 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка системных зависимостей
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
+# Poppler для OCR (pdf2image → pdftoppm) когда PDF без текстового слоя
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Копирование файлов зависимостей
 COPY requirements.txt ./
-
-# Установка зависимостей
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Копирование приложения
 COPY . .

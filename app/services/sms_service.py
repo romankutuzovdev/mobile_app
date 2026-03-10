@@ -14,7 +14,7 @@ class SMSCService:
     PASSWORD = "ForArtur1337!"
 
     @staticmethod
-    def generate_verification_code(length: int = 6) -> str:
+    def generate_verification_code(length: int = 4) -> str:
         """Генерация кода подтверждения"""
         return ''.join(random.choices(string.digits, k=length))
 

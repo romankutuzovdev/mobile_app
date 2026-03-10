@@ -1,0 +1,17 @@
+log_level: INFO
+
+storage:
+  # Пути задаются скриптом при запуске
+  storage_path: /tmp/qdrant_storage_placeholder
+  snapshots_path: /tmp/qdrant_snapshots_placeholder
+
+service:
+  host: 0.0.0.0
+  http_port: 6333
+  grpc_port: 6334
+  enable_cors: true
+
+cluster:
+  enabled: false
+
+telemetry_disabled: true

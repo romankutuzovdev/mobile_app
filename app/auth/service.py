@@ -47,19 +47,19 @@ async def create_user(
     # Проверка существования пользователя по телефону
     existing_user = await get_user_by_phone(db, phone)
     if existing_user:
-        raise UserAlreadyExistsException("User with this phone already exists")
+        raise UserAlreadyExistsException("Пользователь с таким номером телефона уже зарегистрирован")
     
     # Проверка email если указан
     if email:
         existing_email = await get_user_by_email(db, email)
         if existing_email:
-            raise UserAlreadyExistsException("User with this email already exists")
+            raise UserAlreadyExistsException("Пользователь с таким email уже зарегистрирован")
     
     # Проверка username если указан
     if username:
         existing_username = await get_user_by_username(db, username)
         if existing_username:
-            raise UserAlreadyExistsException("User with this username already exists")
+            raise UserAlreadyExistsException("Пользователь с таким именем уже зарегистрирован")
     
     # Создание пользователя
     hashed_password = get_password_hash(password)
@@ -174,6 +174,23 @@ async def delete_refresh_token(db: AsyncSession, token: str) -> None:
     if db_token:
         await db.delete(db_token)
         await db.commit()
+
+
+async def change_password(
+    db: AsyncSession,
+    user_id: int,
+    current_password: str,
+    new_password: str
+) -> bool:
+    """Смена пароля пользователя. Возвращает True при успехе."""
+    user = await get_user_by_id(db, user_id)
+    if not user:
+        return False
+    if not verify_password(current_password, user.hashed_password):
+        return False
+    user.hashed_password = get_password_hash(new_password)
+    await db.commit()
+    return True
 
 
 async def delete_all_user_refresh_tokens(db: AsyncSession, user_id: int) -> None:

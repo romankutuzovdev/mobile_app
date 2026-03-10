@@ -1,0 +1,56 @@
+# Продакшен-конфигурация для развёртывания на сервере
+# Использование: ./scripts/deploy.sh
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: always
+
+  db:
+    image: postgres:15-alpine
+    container_name: fastapi_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: auto_db
+    ports:
+      - "127.0.0.1:5433:5432"  # 5433 на хосте, чтобы не конфликтовать с локальным postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s  # Даём время на первую инициализацию
+    restart: always
+
+  web:
+    build: .
+    container_name: fastapi_web
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    ports:
+      - "8888:8000"  # Доступ по IP:8000
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/auto_db
+      - QDRANT_URL=http://qdrant:6333
+      - DEBUG=false
+    restart: always
+
+volumes:
+  postgres_data:
+  qdrant_data:

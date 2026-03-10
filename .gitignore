@@ -38,6 +38,8 @@ htmlcov/
 
 # ===== IDE & OS =====
 .DS_Store
+._*
+**/._*
 .idea/
 *.swp
 *.swo
@@ -51,6 +53,11 @@ manual/
 **/manual/
 manual_cars_2
 manuals_cars_rus
+
+# ===== Qdrant (локальный бинарник и данные) =====
+.qdrant_bin/
+.qdrant_storage/
+config/qdrant_local.yaml
 
 # ===== Логи и временные файлы =====
 *.log

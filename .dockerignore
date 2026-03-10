@@ -1,0 +1,35 @@
+# Фронтенд — не нужен для бекенда
+auto_client/
+
+# Git
+.git/
+.gitignore
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# IDE, OS
+.idea/
+.vscode/
+.DS_Store
+# macOS resource forks (._*)
+._*
+**/._*
+
+# Qdrant, мануалы (локальные данные)
+.qdrant_storage/
+.qdrant-initialized/
+manuals/
+manual/
+
+# Документация, скрипты деплоя (опционально — оставляем scripts для alembic)
+# scripts/
+
+# Логи, кэш
+*.log
+.cache/

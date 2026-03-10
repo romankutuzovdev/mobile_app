@@ -7,6 +7,7 @@ from app.users.router import router as users_router
 from app.routers.cars import router as cars_router
 from app.routers.chat import router as chat_router
 from app.routers.manual_router import router as manual_router
+from app.routers.car_brands import router as car_brands_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -26,6 +27,7 @@ app.include_router(users_router, prefix="/users", tags=["users"])
 app.include_router(cars_router, prefix="/cars", tags=["cars"])
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(manual_router, prefix="/manuals", tags=["manuals"])
+app.include_router(car_brands_router, prefix="/car-brands", tags=["car-brands"])
 
 
 @app.get("/")

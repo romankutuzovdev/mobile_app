@@ -4,6 +4,7 @@ from uuid import UUID
 import io
 import logging
 import re
+import sys
 
 from app.repositories.manual_repository import ManualRepository
 from app.repositories.qdrant_repository import QdrantRepository
@@ -20,35 +21,173 @@ class ManualService:
     CHUNK_OVERLAP = 150
 
     @staticmethod
+    def _deduplicate_model_words(model: str) -> str:
+        """Убрать повторяющиеся подряд слова: CTS CTS SPORT WAGON -> CTS SPORT WAGON."""
+        words = model.split()
+        if len(words) < 2:
+            return model
+        seen = [words[0]]
+        for w in words[1:]:
+            if w.upper() != seen[-1].upper():
+                seen.append(w)
+        return " ".join(seen)
+
+    @staticmethod
+    def _parse_manual_metadata(title: str, filename: str, content_preview: Optional[str] = None) -> dict:
+        """Извлечь brand, model, year из имени файла (основной источник) и title. Содержимое — только для года, т.к. в PDF часто попадают заголовки разделов."""
+        year = None
+        # Ищем год в filename, title, content (\b не сработает для Chevrolet_2008_HHR)
+        for s in (filename, title, content_preview or ""):
+            if not s:
+                continue
+            m = re.search(r'(19\d{2}|20\d{2})', s)
+            if m:
+                y = int(m.group(1))
+                if 1900 <= y <= 2100:
+                    year = y
+                    break
+
+        # Имя файла — главный источник (наиболее надёжный: Cadillac_2013_CTS_...)
+        name = filename.split(".")[0] if "." in filename else filename
+        parts = [p for p in re.split(r'[\s_\-]+', name) if p]
+        brand_from_file = model_from_file = None
+        if len(parts) >= 2:
+            brand_from_file = parts[0]
+            model_parts = []
+            for p in parts[1:]:
+                if year and p == str(year):
+                    continue
+                if brand_from_file and p.upper() == brand_from_file.upper():
+                    continue
+                if p.lower() in ("owners", "manual", "ownermanual", "pdf", "owner"):
+                    break
+                model_parts.append(p)
+            model_from_file = " ".join(model_parts) if model_parts else (parts[1] if len(parts) > 1 else None)
+            if model_from_file:
+                model_from_file = ManualService._deduplicate_model_words(model_from_file)
+
+        # Title — запасной вариант
+        words = title.replace(",", " ").split()
+        stop_words = {"owners", "manual", "guide", "handbook", "service", "repair"}
+        brand_from_title = words[0] if words else None
+        model_from_title_parts = []
+        for w in words[1:]:
+            if w.isdigit() and len(w) == 4:
+                continue
+            if w.lower() in stop_words:
+                break
+            model_from_title_parts.append(w)
+        model_from_title = " ".join(model_from_title_parts) if model_from_title_parts else None
+
+        # Приоритет: filename > title. Содержимое НЕ перезаписывает brand/model (там заголовки разделов)
+        brand = brand_from_file or brand_from_title or "Unknown"
+        model = model_from_file or model_from_title or "Manual"
+        year = year or 2000
+
+        # Из content берём только год (если не нашли в filename/title)
+        if content_preview and len(content_preview.strip()) > 50 and year == 2000:
+            ref = ManualService._extract_metadata_from_content(content_preview)
+            if ref.get("year") and 1900 <= ref["year"] <= 2100:
+                year = ref["year"]
+
+        return {"brand": brand.strip()[:100], "model": (model or "Manual").strip()[:100], "year": year}
+
+    @staticmethod
+    def _extract_metadata_from_content(text: str) -> dict:
+        """Извлечь brand, model, year из текста мануала (первые страницы)."""
+        result = {}
+        sample = text[:4000] if len(text) > 4000 else text
+        # Год: Model Year 2015, Year: 2015, 2015 Model, (2015)
+        year_m = re.search(r'(?:model\s+year|year|год|модельный\s+год)[:\s]*(\d{4})', sample, re.IGNORECASE)
+        if year_m:
+            y = int(year_m.group(1))
+            if 1900 <= y <= 2100:
+                result["year"] = y
+        if "year" not in result:
+            year_m2 = re.search(r'\b(19\d{2}|20\d{2})\b', sample)
+            if year_m2:
+                y = int(year_m2.group(1))
+                if 1900 <= y <= 2100:
+                    result["year"] = y
+
+        # Паттерны: "Honda Accord", "BMW 3 Series", "Chevrolet HHR"
+        # Часто на первой странице: "Owner's Manual for 2015 Honda Accord" или "для Honda Accord"
+        for pattern in [
+            r'(?:owner[\'s]?\s*manual|руководство)[\s—\-]+(?:\d{4}\s+)?([A-Za-z]+)\s+([A-Za-z0-9\s\-]+?)(?:\s+\d{4}|\.|\s*$)',
+            r'(?:for|для)\s+(?:\d{4}\s+)?([A-Za-z]+)\s+([A-Za-z0-9\s\-]+?)(?:\s*\.|\s+\d{4}|$)',
+            r'(?:for|для)\s+([A-Za-z]+)\s+([A-Za-z0-9\s\-]+)',
+            r'^([A-Za-z]+)\s+([A-Za-z0-9\s\-]{2,50}?)(?:\s+owner|\s+manual|\s+\d{4}|\.|$)',
+        ]:
+            m = re.search(pattern, sample, re.IGNORECASE | re.MULTILINE)
+            if m:
+                b, mod = m.group(1).strip(), m.group(2).strip()
+                section_words = {"performance", "instruments", "controls", "the", "for", "and", "this", "safety"}
+                if len(b) >= 2 and len(mod) >= 1 and b.lower() not in section_words and mod.lower() not in section_words:
+                    result["brand"] = b
+                    result["model"] = mod[:80]
+                    break
+
+        return result
+
+    @staticmethod
+    def _debug(msg: str) -> None:
+        """Вывод отладочной информации в stderr (не буферизуется при docker exec)."""
+        sys.stderr.write(f"[DEBUG] {msg}\n")
+        sys.stderr.flush()
+
+    @staticmethod
     async def upload_manual(
         db: AsyncSession,
         file_content: bytes,
         filename: str,
         title: str,
         car_id: Optional[int] = None,
+        user_id: Optional[int] = None,
         use_ocr_for_pdf: bool = False
     ) -> ManualOut:
-        """Загрузка и обработка мануала. use_ocr_for_pdf=True — для PDF сразу OCR по всем страницам."""
-        # Создаем запись мануала в БД
-        manual = await ManualRepository.create_manual(
-            db=db,
-            title=title,
-            source_file=filename,
-            car_id=car_id
-        )
-
-        # Парсим файл в текст: при use_ocr_for_pdf для PDF сразу OCR, иначе обычный парсинг
+        """Загрузка и обработка мануала. Без car_id — создаёт запись в каталоге (car) из title/filename/содержимого и привязывает мануал."""
+        ManualService._debug(f"=== НАЧАЛО ЗАГРУЗКИ: {filename} ({len(file_content)/1024:.1f} KB) ===")
+        ManualService._debug("Шаг 1/6: Парсинг файла (извлечение текста)...")
+        # Сначала парсим файл — нужен текст и для чанков, и для улучшенного определения марки/модели/года
         if use_ocr_for_pdf and filename.lower().endswith(".pdf"):
-            print("📄 Режим: принудительный OCR по всему PDF (все страницы)...", flush=True)
+            sys.stderr.write("📄 Режим: принудительный OCR по всему PDF (все страницы)...\n")
+            sys.stderr.flush()
             text_content = await ManualService._parse_pdf_with_ocr(file_content)
         else:
             text_content = await ManualService._parse_file(file_content, filename)
-        
+
         if not text_content:
             raise ValueError("Не удалось извлечь текст из файла")
+        ManualService._debug(f"   → Извлечено {len(text_content)} символов текста")
 
-        # Разбиваем на чанки
-        print("📄 Разбиваю текст на чанки...", flush=True)
+        ManualService._debug("Шаг 2/6: Нормализация текста (колонтитулы, пробелы)...")
+        # Нормализация: удаление колонтитулов, исправление слипшихся слов (PDF часто без пробелов)
+        text_content = ManualService._remove_headers_footers(text_content)
+        text_content = ManualService._fix_run_together_words(text_content)
+        logger.info("Текст мануала нормализован (футеры, пробелы)")
+
+        ManualService._debug("Шаг 3/6: Извлечение метаданных (марка, модель, год)...")
+        content_preview = text_content[:4000] if len(text_content) > 4000 else text_content
+        meta = ManualService._parse_manual_metadata(title, filename, content_preview)
+        ManualService._debug(f"   → brand={meta['brand']}, model={meta['model']}, year={meta['year']}")
+        # Название в БД всегда «Марка Модель Год» из имени файла
+        manual_title = f"{meta['brand']} {meta['model']} {meta['year']}"
+
+        ManualService._debug("Шаг 4/6: Создание записи мануала в PostgreSQL...")
+        # Мануал в глобальный каталог — car_id не нужен
+        manual = await ManualRepository.create_manual(
+            db=db,
+            title=manual_title,
+            source_file=filename,
+            brand=meta["brand"],
+            model=meta["model"],
+            year=meta["year"],
+            car_id=car_id
+        )
+        ManualService._debug(f"   → manual_id={manual.id}")
+        logger.info(f"Мануал добавлен в глобальный каталог: {meta['brand']} {meta['model']} ({meta['year']})")
+
+        ManualService._debug("Шаг 5/6: Разбиение текста на чанки (CHUNK_SIZE=800, OVERLAP=150)...")
         chunks = ManualService._split_text_into_chunks(text_content)
         
         # Фильтруем пустые и мусорные чанки
@@ -60,8 +199,12 @@ class ManualService:
                 logger.warning(f"Пропущен мусорный чанк: {chunk[:100]}...")
         
         total_valid = len(valid_chunks)
+        ManualService._debug(f"   → Всего чанков: {len(chunks)}, валидных (после фильтрации): {total_valid}")
         logger.info(f"Из {len(chunks)} чанков валидных: {total_valid}")
-        print(f"✅ Валидных чанков: {total_valid}. Начинаю загрузку в векторную БД (это может занять несколько минут)...", flush=True)
+        sys.stderr.write(f"✅ Валидных чанков: {total_valid}. Начинаю загрузку в векторную БД (это может занять несколько минут)...\n")
+        sys.stderr.flush()
+
+        ManualService._debug("Шаг 6/6: Embedding каждого чанка (OpenAI) → Qdrant → PostgreSQL...")
         
         if not valid_chunks:
             # Пробуем более агрессивную очистку - удаляем все URL-ы и оставляем только текст
@@ -107,9 +250,11 @@ class ManualService:
                 embedding_id = await qdrant_repo.add_chunk(
                     embedding=embedding,
                     manual_id=manual.id,
-                    car_id=car_id,
+                    brand=manual.brand,
+                    model=manual.model,
+                    year=manual.year,
                     page=None,
-                    title=title,
+                    title=manual_title,
                     content=chunk
                 )
                 await ManualRepository.create_chunk(
@@ -120,14 +265,19 @@ class ManualService:
                     page=None
                 )
                 logger.info(f"Обработан чанк {i+1}/{total} для мануала {manual.id}")
-                # Прогресс в консоль каждые 10 чанков или на последнем
+                # Прогресс в консоль каждые 10 чанков или на последнем (с отладкой)
                 if (i + 1) % 10 == 0 or (i + 1) == total:
-                    print(f"   Чанк {i+1}/{total} обработан...", flush=True)
+                    sys.stderr.write(f"   Чанк {i+1}/{total} обработан...\n")
+                    sys.stderr.flush()
+                if (i + 1) <= 3 or (i + 1) % 20 == 0 or (i + 1) == total:
+                    ManualService._debug(f"   [{i+1}/{total}] embedding_id={embedding_id}, превью: {chunk[:60].replace(chr(10), ' ')}...")
             except Exception as e:
                 logger.error(f"Ошибка при обработке чанка {i+1}: {e}")
                 continue
 
-        print(f"✅ Готово: загружено {total} чанков.", flush=True)
+        ManualService._debug(f"=== ЗАВЕРШЕНО: manual_id={manual.id}, загружено {total} чанков в Qdrant и PostgreSQL ===")
+        sys.stderr.write(f"✅ Готово: загружено {total} чанков.\n")
+        sys.stderr.flush()
         return ManualOut.model_validate(manual)
 
     @staticmethod
@@ -152,13 +302,16 @@ class ManualService:
         # Пробуем сначала pdfplumber (лучше работает со сложными PDF)
         try:
             import pdfplumber
+            ManualService._debug("   Парсер: pdfplumber")
             logger.info("📄 Пробую парсинг через pdfplumber...")
             
             pdf_file = io.BytesIO(file_content)
             text_parts = []
             
             with pdfplumber.open(pdf_file) as pdf:
-                logger.info(f"📄 Парсинг PDF: {len(pdf.pages)} страниц")
+                num_pages = len(pdf.pages)
+                ManualService._debug(f"   Страниц в PDF: {num_pages}")
+                logger.info(f"📄 Парсинг PDF: {num_pages} страниц")
                 
                 for page_num, page in enumerate(pdf.pages):
                     page_text = page.extract_text()
@@ -169,6 +322,7 @@ class ManualService:
                             logger.debug(f"   Страница {page_num + 1}: {page_text[:200]}...")
             
             full_text = "\n".join(text_parts)
+            ManualService._debug(f"   Сырой текст (pdfplumber): {len(full_text)} символов")
             logger.info(f"📊 Исходный текст (pdfplumber): {len(full_text)} символов")
             
         except ImportError:
@@ -228,7 +382,9 @@ class ManualService:
             raise ValueError("PDF не содержит извлекаемого текста. Возможно, файл содержит только изображения.")
         
         # Фильтруем мусор: URL-ы, повторяющиеся строки
+        ManualService._debug("   Очистка текста (URL, повторы)...")
         cleaned_text = ManualService._clean_text(full_text)
+        ManualService._debug(f"   После очистки: {len(cleaned_text)} символов")
         logger.info(f"📊 Очищенный текст: {len(cleaned_text)} символов")
         
         if len(cleaned_text.strip()) < 100:
@@ -321,6 +477,89 @@ class ManualService:
         
         return result
 
+    @staticmethod
+    def _remove_headers_footers(text: str) -> str:
+        """Удалить колонтитулы, футеры, номера страниц из текста."""
+        if not text:
+            return ""
+        lines = text.split('\n')
+        out = []
+        # Паттерны типичных футеров/заголовков мануалов
+        footer_patterns = [
+            r'^[A-Za-z\s\-/]+Manual[\s\-]*\d{4}',  # CadillacCTS/CTS-VOwnerManual-2013
+            r'^[A-Za-z\-/]+\d{4}[\s\-]*(?:crc|rev|[\d/])',  # Model2013-crc2-8/22/12
+            r'^[A-Za-z]+Owner[\'s]?\s*Manual',  # Owner Manual
+            r'^crc\d+[\-/]\d+[\-/]\d+',  # crc2-8/22/12
+            r'^\d{1,3}\s*$',  # Номер страницы (отдельная строка)
+            r'^Page\s+\d+\s+of\s+\d+$',  # Page 5 of 120
+            r'^[-–—]+\s*\d+\s*[-–—]+$',  # --- 5 ---
+        ]
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped:
+                out.append(line)
+                continue
+            skip = False
+            for pat in footer_patterns:
+                if re.match(pat, line_stripped, re.IGNORECASE):
+                    skip = True
+                    break
+            # Строка из букв/цифр/слэшей длиной 30+ без пробелов — часто футер
+            if not skip and len(line_stripped) > 35 and ' ' not in line_stripped and re.search(r'\d{4}', line_stripped):
+                skip = True
+            if not skip:
+                out.append(line)
+        return '\n'.join(out)
+
+    @staticmethod
+    def _fix_run_together_words(text: str) -> str:
+        """Вставка пробелов между слипшимися словами (типично для PDF без нормальных пробелов)."""
+        if not text:
+            return ""
+        # 0. Прямые склейки, частые в мануалах
+        text = re.sub(r'and/or', r' and or ', text, flags=re.IGNORECASE)
+        text = re.sub(r'lockall', r'lock all', text, flags=re.IGNORECASE)
+        text = re.sub(r'lockthe', r'lock the', text, flags=re.IGNORECASE)
+        text = re.sub(r'automaticseat', r'automatic seat', text, flags=re.IGNORECASE)
+        # when после глагола: occurswhen, identifiedwhen
+        text = re.sub(r'([a-z]{4,})when([A-Za-z])', r'\1 when \2', text, flags=re.IGNORECASE)
+        # 1. Пробел между строчной и заглавной: automaticSeat -> automatic Seat
+        text = re.sub(r'([a-zа-яё])([A-ZА-ЯЁ])', r'\1 \2', text)
+        # 2. Пробел между заглавной и строчной (camelCase): theRKE -> the RKE
+        text = re.sub(r'([A-ZА-ЯЁ]{2,})([a-zа-яё])', r'\1 \2', text)
+        # 3. Разделение слипшихся слов через "and": seatandsteering -> seat and steering
+        text = re.sub(r'([a-z]{2,})and([a-z]{2,})', r'\1 and \2', text, flags=re.IGNORECASE)
+        # 4. Разделение через "or" (4+ букв с обеих сторон, чтобы не разбить "steering", "door")
+        text = re.sub(r'([a-z]{4,})or([a-z]{4,})', r'\1 or \2', text, flags=re.IGNORECASE)
+        # 5. "the" между словами: oftheDoor, leavingthevehicle -> of the Door, leaving the vehicle
+        text = re.sub(r'([a-z])the([A-Z])', r'\1 the \2', text, flags=re.IGNORECASE)
+        text = re.sub(r'([a-z]{3,})the([a-z]{3,})', r'\1 the \2', text, flags=re.IGNORECASE)
+        # 6. "to" между словами (4+ слева; не разбивать "nto" в movement, content)
+        text = re.sub(r'([a-z]{4,})(?<![n])to([a-z]{2,})', r'\1 to \2', text, flags=re.IGNORECASE)
+        # 7. "of" между словами: allofthe -> all of the
+        text = re.sub(r'([a-z]{2,})of([a-z]{2,})', r'\1 of \2', text, flags=re.IGNORECASE)
+        # 8. "for" между словами
+        text = re.sub(r'([a-z]{2,})for([a-z]{2,})', r'\1 for \2', text, flags=re.IGNORECASE)
+        # 9. "in" перед заглавной: wheninMotion -> when in Motion
+        text = re.sub(r'([a-z]{3,})in([A-Z][a-z])', r'\1 in \2', text, flags=re.IGNORECASE)
+        # 10. "upon", "movement" — occurs upon, column movement
+        text = re.sub(r'occursupon', r'occurs upon', text, flags=re.IGNORECASE)
+        text = re.sub(r'columnmovement', r'column movement', text, flags=re.IGNORECASE)
+        text = re.sub(r'movementoccurs', r'movement occurs', text, flags=re.IGNORECASE)
+        text = re.sub(r'([a-z]{2,})orwhen', r'\1 or when', text, flags=re.IGNORECASE)
+        text = re.sub(r'[,.]orwhen', r', or when', text, flags=re.IGNORECASE)
+        text = re.sub(r'([a-z]{4,})is([a-z]{4,})', r'\1 is \2', text, flags=re.IGNORECASE)  # transmitterispressed
+        text = re.sub(r'([a-z]{4,})upon(\s|[A-Z])', r'\1 upon \2', text, flags=re.IGNORECASE)
+        # 11. Частые в мануалах: seat, door, lock, driver
+        text = re.sub(r'([a-z]{3,})seat([a-z]{2,})', r'\1 seat \2', text, flags=re.IGNORECASE)
+        text = re.sub(r'([a-z]{3,})door([a-z]{2,})', r'\1 door \2', text, flags=re.IGNORECASE)
+        text = re.sub(r'([a-z]{3,})lock([a-z]{2,})', r'\1 lock \2', text, flags=re.IGNORECASE)
+        text = re.sub(r'([a-z]{3,})driver([a-z]{2,})', r'\1 driver \2', text, flags=re.IGNORECASE)
+        text = re.sub(r'([a-z]{3,})hold([a-z]{2,})', r'\1 hold \2', text, flags=re.IGNORECASE)
+        # 12. Убираем двойные/тройные пробелы
+        text = re.sub(r' +', ' ', text)
+        return text
+
     # Латинские буквы, которые Tesseract часто путает с кириллицей при OCR русского текста.
     # Полная таблица по типичным ошибкам OCR: A→А, B→В, C→С, E→Е, H→Н, K→К, M→М, O→О, P→Р, T→Т, X→Х, Y→У,
     # a→а, c→с, e→е, p→р, o→о, x→х, y→у, N→Н, n→н, L→Л, l→л, G→Г, g→г, U→У, u→у, I→И, i→и, R→Р, r→р,
@@ -375,7 +614,8 @@ class ManualService:
         def _log_progress(msg: str) -> None:
             """Вывод в консоль, чтобы пользователь видел прогресс"""
             logger.info(msg)
-            print(msg, flush=True)
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
         
         try:
             _log_progress("🔍 Начинаю OCR распознавание PDF...")
@@ -541,10 +781,39 @@ class ManualService:
         return ManualOut.model_validate(manual)
 
     @staticmethod
-    async def get_manuals_list(db: AsyncSession) -> List[ManualOut]:
-        """Список всех мануалов"""
-        manuals = await ManualRepository.get_all_manuals(db)
+    async def get_manuals_list(
+        db: AsyncSession, car_id: Optional[int] = None, orphaned_only: bool = False
+    ) -> List[ManualOut]:
+        """Список мануалов. car_id — мануалы из глобального каталога по brand/model/year машины."""
+        if car_id is not None:
+            from app.repositories.car_repository import CarRepository
+            car = await CarRepository.get_car_by_id(db, car_id)
+            if car:
+                manuals = await ManualRepository.get_manuals_by_brand_model_year(
+                    db, car.brand, car.model, car.year
+                )
+            else:
+                manuals = []
+        elif orphaned_only:
+            manuals = await ManualRepository.get_orphaned_manuals(db)
+        else:
+            manuals = await ManualRepository.get_all_manuals(db)
         return [ManualOut.model_validate(m) for m in manuals]
+
+    @staticmethod
+    async def update_manual_car(
+        db: AsyncSession, manual_id: UUID, car_id: int, user_id: int
+    ) -> Optional[ManualOut]:
+        """Привязать мануал к автомобилю пользователя"""
+        from app.repositories.car_repository import CarRepository
+
+        car = await CarRepository.get_car_by_id(db, car_id)
+        if not car or car.user_id != user_id:
+            return None
+        manual = await ManualRepository.update_car_id(db, manual_id, car_id)
+        if not manual:
+            return None
+        return ManualOut.model_validate(manual)
 
     @staticmethod
     async def delete_manual(db: AsyncSession, manual_id: UUID) -> bool:

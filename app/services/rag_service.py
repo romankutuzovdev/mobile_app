@@ -41,11 +41,16 @@ class RAGService:
         question: str,
         car_id: Optional[int] = None,
         manual_id: Optional[UUID] = None,
+        brand: Optional[str] = None,
+        model: Optional[str] = None,
+        year: Optional[int] = None,
         db: Optional[AsyncSession] = None
     ) -> Dict[str, Any]:
         """Поиск ответа на вопрос с использованием RAG"""
         try:
-            return await RAGService._ask_question_impl(question, car_id, manual_id, db)
+            return await RAGService._ask_question_impl(
+                question, car_id, manual_id, brand, model, year, db
+            )
         except Exception as e:
             logger.exception(f"Ошибка RAG: {e}")
             return {
@@ -59,24 +64,59 @@ class RAGService:
         question: str,
         car_id: Optional[int],
         manual_id: Optional[UUID],
+        brand: Optional[str],
+        model: Optional[str],
+        year: Optional[int],
         db: Optional[AsyncSession]
     ) -> Dict[str, Any]:
         logger.info(f"🔍 Начинаю поиск ответа на вопрос: {question[:50]}...")
         if manual_id:
             logger.info(f"   Фильтр по мануалу: {manual_id}")
         
-        # Получаем embedding для вопроса
+        # car_id → brand/model/year для поиска в глобальном каталоге
+        qdrant_car_id = car_id
+        qdrant_manual_ids = None
+        qdrant_brand, qdrant_model, qdrant_year = brand, model, year
+        
+        if db and car_id and not manual_id:
+            from app.models.car import Car
+            from sqlalchemy import select
+            result = await db.execute(select(Car).where(Car.id == car_id))
+            car = result.scalar_one_or_none()
+            if car:
+                manuals = await ManualRepository.get_manuals_by_brand_model_year(
+                    db, car.brand, car.model, car.year
+                )
+                if manuals:
+                    qdrant_car_id = None
+                    qdrant_manual_ids = [str(m.id) for m in manuals]
+                    qdrant_brand, qdrant_model, qdrant_year = car.brand, car.model, car.year
+                else:
+                    qdrant_brand, qdrant_model, qdrant_year = car.brand, car.model, car.year
+                    qdrant_car_id = None
+            else:
+                qdrant_car_id = car_id
+        elif brand and model and year and not manual_id and db:
+            manuals = await ManualRepository.get_manuals_by_brand_model_year(
+                db, brand, model, year
+            )
+            if manuals:
+                qdrant_manual_ids = [str(m.id) for m in manuals]
+                qdrant_brand, qdrant_model, qdrant_year = brand, model, year
+        
         embedding_service = EmbeddingService()
         question_embedding = await embedding_service.get_embedding(question)
         logger.info(f"✅ Получен embedding для вопроса (размерность: {len(question_embedding)})")
 
-        # Ищем релевантные чанки в Qdrant
         qdrant_repo = QdrantRepository()
-        # Если задан manual_id — берём много результатов, потом отфильтруем по мануалу (иначе в топе могут быть только другие мануалы)
         search_limit = 400 if manual_id else 25
         relevant_chunks = await qdrant_repo.search_chunks(
             query_embedding=question_embedding,
-            car_id=car_id,
+            car_id=qdrant_car_id,
+            manual_ids=qdrant_manual_ids,
+            brand=qdrant_brand,
+            model=qdrant_model,
+            year=qdrant_year,
             limit=search_limit
         )
         
@@ -123,12 +163,10 @@ class RAGService:
 
         if not relevant_chunks:
             logger.warning("⚠️  Не найдено релевантных чанков в Qdrant")
-            # Пробуем поиск без фильтра car_id
-            if car_id is not None:
-                logger.info("🔄 Пробую поиск без фильтра car_id...")
+            if qdrant_car_id or qdrant_manual_ids or qdrant_brand:
+                logger.info("🔄 Пробую поиск без фильтра...")
                 relevant_chunks = await qdrant_repo.search_chunks(
                     query_embedding=question_embedding,
-                    car_id=None,  # Убираем фильтр
                     limit=25
                 )
                 logger.info(f"📊 Найдено чанков без фильтра: {len(relevant_chunks)}")

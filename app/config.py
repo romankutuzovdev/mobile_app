@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     
     # OpenAI/ChatGPT API
     OPENAI_API_KEY: str = ""
-    # По умолчанию используем gpt-4o (современная модель с хорошим качеством)
-    OPENAI_MODEL: str = "gpt-4o"
+    # gpt-4o-mini — ~10–20x дешевле gpt-4o, подходит для чата; gpt-4o — для сложных задач
+    OPENAI_MODEL: str = "gpt-4o-mini"
     # Прокси для OpenAI API (если требуется обход региональных ограничений)
     OPENAI_PROXY: Optional[str] = None
     

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import logging
@@ -129,6 +130,18 @@ async def chat_about_vehicle(
 
     vehicle_block = "\n".join(lines)
 
+    # История чата (до текущего вопроса) — для контекста диалога
+    hist_result = await db.execute(
+        select(ChatMessage)
+        .where(
+            ChatMessage.user_id == current_user.id,
+            ChatMessage.car_id == car.id,
+        )
+        .order_by(ChatMessage.created_at.asc())
+    )
+    hist_messages = hist_result.scalars().all()
+    history = [{"role": m.role, "content": m.content} for m in hist_messages]
+
     # Сохраняем вопрос в БД
     user_msg = ChatMessage(
         user_id=current_user.id,
@@ -139,18 +152,27 @@ async def chat_about_vehicle(
     db.add(user_msg)
     await db.flush()
 
-    # Вызов ChatGPT
+    # Вызов ChatGPT с полной историей диалога
     try:
+        from app.config import settings
+        if not settings.OPENAI_API_KEY or not settings.OPENAI_API_KEY.strip():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI-чат не настроен. Добавьте OPENAI_API_KEY в файл .env и перезапустите бэкенд.",
+            )
         logger.info(
-            "🔧 [chat.vehicle] user_id=%s car_id=%s question=%r",
+            "🔧 [chat.vehicle] user_id=%s car_id=%s question=%r history_len=%d",
             current_user.id,
             car.id,
             payload.question,
+            len(history),
         )
         answer = await ChatGPTVehicleService.ask_vehicle_question(
-            vehicle_block, payload.question
+            vehicle_block, payload.question, history=history
         )
         logger.info("✅ [chat.vehicle] GPT ответ получен, длина=%d", len(answer))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
             "❌ [chat.vehicle] Ошибка при обращении к ChatGPT: %s\n%s",

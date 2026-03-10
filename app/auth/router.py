@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import timedelta, datetime
 
 from app.database import get_db
-from app.auth.schemas import UserCreate, UserLogin, UserResponse, Token, TokenRefresh
+from app.auth.schemas import UserCreate, UserLogin, UserResponse, Token, TokenRefresh, ChangePasswordRequest
 from app.auth.service import (
     create_user,
     authenticate_user,
@@ -12,7 +12,8 @@ from app.auth.service import (
     delete_refresh_token,
     get_user_by_id,
     send_verification_code,
-    verify_phone_code
+    verify_phone_code,
+    change_password as change_password_service,
 )
 from app.schemas.sms import (
     SendVerificationCodeRequest,
@@ -44,6 +45,8 @@ async def register(
             username=user_data.username
         )
         return user
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -197,6 +200,27 @@ async def get_current_user_info(
 ):
     """Получение информации о текущем пользователе"""
     return current_user
+
+
+@router.patch("/change-password")
+async def change_password(
+    request: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Смена пароля текущего пользователя"""
+    success = await change_password_service(
+        db=db,
+        user_id=current_user.id,
+        current_password=request.current_password,
+        new_password=request.new_password
+    )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный текущий пароль"
+        )
+    return {"message": "Пароль успешно изменён"}
 
 
 @router.post("/logout")

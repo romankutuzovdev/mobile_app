@@ -8,11 +8,14 @@ from app.database import Base
 
 
 class Manual(Base):
-    """Модель мануала автомобиля"""
+    """Мануал в глобальном каталоге. brand/model/year — для совпадения с машинами пользователей."""
     __tablename__ = "manuals"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    car_id = Column(Integer, ForeignKey("cars.id", ondelete="SET NULL"), nullable=True, index=True)
+    car_id = Column(Integer, ForeignKey("cars.id", ondelete="SET NULL"), nullable=True, index=True)  # legacy, опционально
+    brand = Column(String(100), nullable=False, index=True)
+    model = Column(String(150), nullable=False, index=True)
+    year = Column(Integer, nullable=False, index=True)
     title = Column(String, nullable=False)
     source_file = Column(String, nullable=False)  # Имя исходного файла
     created_at = Column(DateTime, default=datetime.utcnow)
