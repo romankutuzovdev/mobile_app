@@ -6,7 +6,9 @@ from app.config import settings
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
-    future=True
+    future=True,
+    pool_pre_ping=True,  # проверка соединения перед использованием (помогает при долгих операциях через SSH-туннель)
+    pool_recycle=300,    # переподключение каждые 5 мин при простое
 )
 
 AsyncSessionLocal = async_sessionmaker(

@@ -39,6 +39,23 @@ async def list_cars(
     return cars
 
 
+@router.get("/{car_id}", response_model=CarOut)
+async def get_car(
+    car_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Получить автомобиль по ID"""
+    try:
+        car = await CarService.get_car(db, car_id, current_user.id)
+        return car
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+
+
 @router.put("/{car_id}", response_model=CarOut)
 async def update_car(
     car_id: int,

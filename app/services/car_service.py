@@ -149,6 +149,29 @@ class CarService:
         return await CarRepository.delete_car(db, car_id)
 
     @staticmethod
+    async def get_car(
+        db: AsyncSession,
+        car_id: int,
+        user_id: int
+    ) -> CarOut:
+        """Получить автомобиль по ID с проверкой прав доступа"""
+        from app.repositories.manual_repository import ManualRepository
+
+        car = await CarRepository.get_car_by_id(db, car_id)
+        if not car:
+            raise ValueError("Автомобиль не найден")
+
+        if car.user_id != user_id:
+            raise ValueError("У вас нет доступа к этому автомобилю")
+
+        manuals = await ManualRepository.get_manuals_by_brand_model_year(
+            db, car.brand, car.model, car.year
+        )
+        car_out = CarOut.model_validate(car)
+        car_out.has_manuals = len(manuals) > 0
+        return car_out
+
+    @staticmethod
     async def list_user_cars(
         db: AsyncSession,
         user_id: int

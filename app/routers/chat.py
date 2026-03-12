@@ -174,14 +174,16 @@ async def chat_about_vehicle(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "❌ [chat.vehicle] Ошибка при обращении к ChatGPT: %s\n%s",
-            e,
-            traceback.format_exc(),
-        )
+        tb = traceback.format_exc()
+        logger.error("❌ [chat.vehicle] Ошибка при обращении к ChatGPT: %s\n%s", e, tb)
+        # В stderr для docker logs — полный стек
+        import sys
+        sys.stderr.write(f"[CHAT] 502 Ошибка: {type(e).__name__}: {e}\n")
+        sys.stderr.write(f"[CHAT] Traceback:\n{tb}\n")
+        sys.stderr.flush()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Ошибка при обращении к ChatGPT: {type(e).__name__}: {e}",
+            detail=f"Ошибка при обращении к ChatGPT: {type(e).__name__}: {str(e)[:200]}",
         )
 
     # Сохраняем ответ ассистента

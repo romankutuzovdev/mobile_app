@@ -274,7 +274,11 @@ class RAGService:
         # Отправляем запрос в OpenAI
         try:
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            import httpx
+            client_kwargs = {"api_key": settings.OPENAI_API_KEY}
+            if getattr(settings, "OPENAI_PROXY", None) and str(settings.OPENAI_PROXY).strip():
+                client_kwargs["http_client"] = httpx.AsyncClient(proxy=settings.OPENAI_PROXY)
+            client = AsyncOpenAI(**client_kwargs)
             
             # Определяем параметры в зависимости от модели
             completion_params = {}

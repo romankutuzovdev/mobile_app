@@ -313,13 +313,19 @@ class ManualService:
                 ManualService._debug(f"   Страниц в PDF: {num_pages}")
                 logger.info(f"📄 Парсинг PDF: {num_pages} страниц")
                 
+                chars_total = 0
                 for page_num, page in enumerate(pdf.pages):
                     page_text = page.extract_text()
                     if page_text:
                         text_parts.append(page_text)
-                        # Логируем первые 200 символов первых страниц для отладки
-                        if page_num < 3:
-                            logger.debug(f"   Страница {page_num + 1}: {page_text[:200]}...")
+                        chars_total += len(page_text)
+                    n = page_num + 1
+                    sys.stderr.write(f"\r   Парсинг: страница {n}/{num_pages} ({chars_total} символов)   ")
+                    sys.stderr.flush()
+                    if page_num < 3 and page_text:
+                        logger.debug(f"   Страница {page_num + 1}: {page_text[:200]}...")
+                sys.stderr.write("\n")  # новая строка после прогресса
+                sys.stderr.flush()
             
             full_text = "\n".join(text_parts)
             ManualService._debug(f"   Сырой текст (pdfplumber): {len(full_text)} символов")
@@ -333,15 +339,23 @@ class ManualService:
                 pdf_file = io.BytesIO(file_content)
                 pdf_reader = PyPDF2.PdfReader(pdf_file)
                 
-                logger.info(f"📄 Парсинг PDF: {len(pdf_reader.pages)} страниц")
+                num_pages = len(pdf_reader.pages)
+                logger.info(f"📄 Парсинг PDF: {num_pages} страниц")
                 
                 text_parts = []
+                chars_total = 0
                 for page_num, page in enumerate(pdf_reader.pages):
                     page_text = page.extract_text()
                     if page_text:
                         text_parts.append(page_text)
-                        if page_num < 3:
-                            logger.debug(f"   Страница {page_num + 1}: {page_text[:200]}...")
+                        chars_total += len(page_text)
+                    n = page_num + 1
+                    sys.stderr.write(f"\r   Парсинг: страница {n}/{num_pages} ({chars_total} символов)   ")
+                    sys.stderr.flush()
+                    if page_num < 3 and page_text:
+                        logger.debug(f"   Страница {page_num + 1}: {page_text[:200]}...")
+                sys.stderr.write("\n")
+                sys.stderr.flush()
                 
                 full_text = "\n".join(text_parts)
                 logger.info(f"📊 Исходный текст (PyPDF2): {len(full_text)} символов")
@@ -355,13 +369,19 @@ class ManualService:
                 import PyPDF2
                 pdf_file = io.BytesIO(file_content)
                 pdf_reader = PyPDF2.PdfReader(pdf_file)
-                
+                num_pages = len(pdf_reader.pages)
                 text_parts = []
-                for page in pdf_reader.pages:
+                chars_total = 0
+                for page_num, page in enumerate(pdf_reader.pages):
                     page_text = page.extract_text()
                     if page_text:
                         text_parts.append(page_text)
-                
+                        chars_total += len(page_text)
+                    n = page_num + 1
+                    sys.stderr.write(f"\r   Парсинг: страница {n}/{num_pages} ({chars_total} символов)   ")
+                    sys.stderr.flush()
+                sys.stderr.write("\n")
+                sys.stderr.flush()
                 full_text = "\n".join(text_parts)
                 logger.info(f"📊 Исходный текст (PyPDF2 fallback): {len(full_text)} символов")
             except Exception as e2:
