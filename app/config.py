@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: Optional[str] = None
 
+    # Car API — каталог авто, VIN и т.д. (https://carapi.app/docs)
+    CARAPI_BASE_URL: str = "https://carapi.app/api"
+    CARAPI_API_TOKEN: str = ""
+    CARAPI_API_SECRET: str = ""
+
 
 settings = Settings()
 

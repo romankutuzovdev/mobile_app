@@ -11,6 +11,7 @@ class ChatMessageBase(BaseModel):
 class ChatMessageOut(ChatMessageBase):
   id: int
   car_id: Optional[int] = None
+  catalog_trim_id: Optional[int] = None
   created_at: datetime
 
   class Config:
@@ -19,6 +20,11 @@ class ChatMessageOut(ChatMessageBase):
 
 class ChatRequest(BaseModel):
   car_id: int
+  question: str
+
+
+class CatalogTrimChatRequest(BaseModel):
+  trim_id: int = Field(..., description="ID комплектации Car API (/catalog/trims/{id})")
   question: str
 
 

@@ -12,6 +12,8 @@ class ChatMessage(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     car_id = Column(Integer, ForeignKey("cars.id", ondelete="CASCADE"), nullable=True, index=True)
+    # ID комплектации в Car API (чат по каталогу без привязки к cars.id)
+    catalog_trim_id = Column(Integer, nullable=True, index=True)
     role = Column(String(16), nullable=False)  # 'user' | 'assistant' | 'system'
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
